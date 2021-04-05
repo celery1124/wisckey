@@ -1,0 +1,168 @@
+/******* wisckey *******/
+/* db_impl.cc
+* 07/23/2019
+* by Mian Qin
+*/
+#include <iostream>
+#include <mutex>
+#include "wisckey/db.h"
+#include "wisckey/iterator.h"
+#include "db_impl.h"
+#include "db_iter.h"
+#include "hash.h"
+
+namespace wisckey {
+
+DBImpl::DBImpl(const Options& options, const std::string& dbname) 
+: options_(options) {
+  rocksdb::Options rocksOptions;
+  rocksOptions.IncreaseParallelism();
+  rocksOptions.OptimizeLevelStyleCompaction();
+  rocksOptions.create_if_missing = true;
+  rocksOptions.max_open_files = -1;
+  rocksOptions.compression = rocksdb::kNoCompression;
+  rocksOptions.paranoid_checks = false;
+  // rocksOptions.allow_mmap_reads = false;
+  // rocksOptions.allow_mmap_writes = false;
+  // rocksOptions.use_direct_io_for_flush_and_compaction = true;
+  // rocksOptions.use_direct_reads = true;
+  rocksOptions.write_buffer_size = 20 << 20;
+  rocksOptions.target_file_size_base = 20 * 1048576;
+  rocksOptions.max_bytes_for_level_base = 10 * 1048576;
+
+  rocksdb::BlockBasedTableOptions table_options;
+  // table_options.cache_index_and_filter_blocks = true;
+  // table_options.block_cache = rocksdb::NewLRUCache(options.indexCacheSize * 1024 * 1024LL); 
+  rocksOptions.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
+
+  if (options.dataCacheSize > 0) {
+    cache_ = NewLRUCache((size_t)options.dataCacheSize << 20, 0);
+  }
+  else {
+    cache_ = nullptr;
+  }
+
+  // apply db options
+  rocksdb::Status status = rocksdb::DB::Open(rocksOptions, dbname, &rdb_);
+  if (status.ok()) printf("rocksdb open ok\n");
+  else printf("rocksdb open error\n");
+
+  std::string dbWiskeyLog = dbname+"/wiskey.log";
+  if( access( dbWiskeyLog.c_str(), F_OK ) == 0 ) {
+    logFD_ = open(dbWiskeyLog.c_str(), O_RDWR|O_APPEND);
+    lseek(logFD_, 0, SEEK_END);
+    std::cout << "Open existing Wisckey log path:  " << dbWiskeyLog << " (" << logFD_ << ")" << std::endl;
+  }
+  else {
+    logFD_ = open(dbWiskeyLog.c_str(), O_RDWR|O_CREAT|O_APPEND, 0777);
+    std::cout << "Create Wisckey log path:  " << dbWiskeyLog << " (" << logFD_ << ")" << std::endl;
+  }
+}
+
+DBImpl::~DBImpl() {
+  if (cache_) delete cache_;
+  delete rdb_;
+  fsync(logFD_);
+  fdatasync(logFD_);
+  close(logFD_);
+}
+
+inline int roundUp(int in, int roundTo)
+{
+    assert(roundTo > 0);
+    int remainder = in % roundTo;
+    if (remainder == 0)
+        return in;
+    else
+      return in + roundTo - remainder;
+}
+
+Status DBImpl::Put(const WriteOptions& options,
+                     const Slice& key,
+                     const Slice& value) {
+
+  // insert to in-memory cache
+  std::string skey(key.data(), key.size());
+  Cache::Handle* h = insert_cache(skey, value);
+  release_cache(h);
+
+  uint64_t logOffset;
+  int wret;
+  // write value to log, make sure lseek and write atomic
+  {
+    std::unique_lock<std::mutex> lock(logM_);
+    logOffset = lseek(logFD_, (size_t)0, SEEK_END);
+    wret = write(logFD_, value.data(), value.size());
+  }
+  // printf("offset: %d, size: %d, write: %d, errno: %d\n", logOffset, wSize, wret, errno);
+  
+  assert(logOffset >= 0);
+  char metaVal[12];
+  uint32_t valSize = value.size();
+  memcpy(metaVal, &logOffset, sizeof(logOffset));
+  memcpy(metaVal+8, &valSize, sizeof(valSize)); // not pretty!
+  rocksdb::Slice rocks_key(key.data(), key.size());
+  rocksdb::Slice rocks_val(metaVal, 12);
+  rocksdb::Status s = rdb_->Put(rocksdb::WriteOptions(), rocks_key, rocks_val);
+  assert(s.ok());
+
+  return Status();
+}
+
+Status DBImpl::Delete(const WriteOptions& options, const Slice& key) {
+  // not supported yet
+  
+  return Status();
+}
+
+
+Status DBImpl::Get(const ReadOptions& options,
+                     const Slice& key,
+                     std::string* value) {
+  
+  // read in-memory cache
+  std::string skey(key.data(), key.size());
+  Cache::Handle *h = read_cache(skey, value);
+  if (h != NULL) { // hit in cache
+      release_cache(h);
+      return Status();
+  }
+
+  // read from device
+  rocksdb::Slice rocks_key(key.data(), key.size());
+  std::string rocks_val;
+  rocksdb::Status s = rdb_->Get(rocksdb::ReadOptions(), rocks_key, &rocks_val);
+  if (s.IsNotFound()) return Status().NotFound(Slice());
+  
+  assert(s.ok() && rocks_val.size() == 12);
+  char *p = &rocks_val[0];
+  uint64_t logOffset= *((uint64_t *)p);
+  p = p + 8;
+  uint32_t valSize = *((uint32_t *)p);
+  value->resize(valSize);
+  size_t ret = pread(logFD_, &((*value)[0]), valSize, logOffset);
+  assert(ret >= 0);
+
+  // insert to in-memory cache
+  const Slice val(value->data(), value->size());
+  h = insert_cache(skey, val);
+  release_cache(h);
+  return Status();
+}
+
+Iterator* DBImpl::NewIterator(const ReadOptions& options) {
+  return NewDBIterator(this, options);
+}
+
+Status DB::Open(const Options& options, const std::string& dbname,
+                DB** dbptr) {
+
+  *dbptr = NULL;
+
+  DB *db = new DBImpl(options, dbname);
+  *dbptr = db;
+  return Status(Status::OK());
+}
+
+}  // namespace wisckey
+
