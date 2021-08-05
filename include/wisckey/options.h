@@ -136,6 +136,10 @@ struct Options {
   // Statistic dump interval in seconds
   // Default: -1 (no dump)
   int stats_dump_interval;
+  
+  // Read only option (readonly can bypass cache)
+  // Default: false
+  bool readonly;
 
   Options() : indexCacheSize(128),
               prefetchEnabled(false),
@@ -163,7 +167,8 @@ struct Options {
               walBufSize(1<<20),
               GCWorkerThreads(16),
               statistics(nullptr),
-              stats_dump_interval(-1) { }
+              stats_dump_interval(-1),
+              readonly(false) { }
 
   static std::shared_ptr<Statistics> CreateDBStatistics() {
     printf("Wisckey Statistics Created\n");

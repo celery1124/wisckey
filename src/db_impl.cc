@@ -63,7 +63,8 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
     cache_ = NewLRUCache((size_t)options.dataCacheSize << 20, 0);
   }
   else {
-    cache_ = nullptr;
+    if (options.readonly) cache_ = nullptr;
+    else cache_ = NewLRUCache(4<<20, 16); // minimum in-memory cache (4MB) for write queue (get need to examine write Q before reaching device)
   }
   options.statistics.get()->setStatsDump(options.stats_dump_interval);
 
@@ -452,7 +453,8 @@ void DBImpl::vLogGarbageCollect() {
     cache_ = NewLRUCache((size_t)options_.dataCacheSize << 20, 0);
   }
   else {
-    cache_ = nullptr;
+    if (options_.readonly) cache_ = nullptr;
+    else cache_ = NewLRUCache(4<<20, 16); // minimum in-memory cache (4MB) for write queue (get need to examine write Q before reaching device)
   }
 };
 
