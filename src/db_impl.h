@@ -22,6 +22,7 @@
 #include "cache/cache.h"
 
 #include "hash.h"
+#include "threadpool.h"
 
 #include "rocksdb/db.h"
 #include "rocksdb/filter_policy.h"
@@ -94,6 +95,10 @@ private:
 
   void flushVLog();
   void vLogGCWorker(std::vector<std::string> *ukey_list, std::vector<std::string> *vmeta_list, int idx, int size, int* oldLogFD, int* newLogFD);
+
+    // thread pool
+    threadpool_t *pool_;
+    sem_t q_sem_;
 
   // in-memory cache
   Cache *cache_;

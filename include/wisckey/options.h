@@ -53,57 +53,13 @@ struct Options {
   // Default: false
   bool rangefilterEnabled;
 
-  // Helper record hint
-  int helperHint;
-  int helperTrainingThres;
+  // Number of threads for thread pool to conduct async pread
+  // Default: 16
+  int threadPoolThreadsNum;
 
-  // Pack size for physical KV
-  // Default: 4096
-  int packSize;
-
-  // Value size threshold for packing
-  // Default: 4096
-  int packThres;
-
-  // Max number of KVs for packing
-  // Default: 8
-  int maxPackNum;
-
-  // Timeout for packing thread dequeue in us
-  // Default: 5000
-  int packDequeueTimeout;
-
-  // Depth of the packed KV queue
-  // Default: 1024
-  int packQueueDepth;
-
-  // Number of threads to write packed KV
-  // Default: 8
-  int packThreadsNum;
-
-  // Disable BG packing threads
-  // Default: false
-  bool packThreadsDisable;
-
-  // Manual compaction
-  // Default: false
-  bool manualCompaction;
-
-  // Background compaction
-  // Default: false
-  bool bgCompaction;
-
-  // Background compaction interval (sec)
-  // Default: 10
-  bool bgCompactionInterval;
-
-  // Background compaction scan length
-  // Default: 100000
-  bool bgCompactionScanLength;
-
-  // Hot key training count
-  // Default: 1000000
-  int hotKeyTrainingNum;
+  // Depth of the thread pool queue
+  // Default: 128
+  int threadPoolQueueDepth;
 
   // Filter Type
   // Default: None
@@ -146,20 +102,8 @@ struct Options {
               prefetchDepth(64),
               prefetchReqThres(128),
               rangefilterEnabled(false),
-              helperHint(0),
-              helperTrainingThres(10),
-              packSize(4096),
-              packThres(4096),
-              maxPackNum(8),
-              packDequeueTimeout(5000),
-              packQueueDepth(1024),
-              packThreadsNum(8),
-              packThreadsDisable(false),
-              manualCompaction(false),
-              bgCompaction(false),
-              bgCompactionInterval(10),
-              bgCompactionScanLength(100000),
-              hotKeyTrainingNum(1000000),
+              threadPoolThreadsNum(16),
+              threadPoolQueueDepth(128),
               filterType(NoFilter),
               filterBitsPerKey(8),
               dataCacheSize(16),
@@ -168,7 +112,20 @@ struct Options {
               GCWorkerThreads(16),
               statistics(nullptr),
               stats_dump_interval(-1),
-              readonly(false) { }
+              readonly(false) { 
+  // Load from environment variable
+    char *env_p;
+    if(env_p = std::getenv("PREFETCH_ENA")) {
+      if (strcmp(env_p, "TRUE") == 0 || strcmp(env_p, "true") == 0)
+        prefetchEnabled = true;
+      else
+        prefetchEnabled = false;
+    }
+
+    if(env_p = std::getenv("PREFETCH_DEPTH")) {
+      prefetchDepth = atoi(env_p);
+    }
+  }
 
   static std::shared_ptr<Statistics> CreateDBStatistics() {
     printf("Wisckey Statistics Created\n");

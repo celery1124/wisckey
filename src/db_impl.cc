@@ -68,6 +68,10 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
   }
   options.statistics.get()->setStatsDump(options.stats_dump_interval);
 
+  // start thread pool for async i/o
+  pool_ = threadpool_create(options.threadPoolThreadsNum, options.threadPoolQueueDepth, 0, &q_sem_);
+  sem_init(&q_sem_, 0, options.threadPoolQueueDepth-1);
+
   // apply db options
   rocksdb::Status status = rocksdb::DB::Open(rocksOptions, dbname, &rdb_);
   if (status.ok()) printf("rocksdb open ok\n");
@@ -110,6 +114,10 @@ DBImpl::~DBImpl() {
   if (cache_) delete cache_;
   rocksdb::CancelAllBackgroundWork(rdb_, true);
   delete rdb_;
+
+  // thread pool
+  threadpool_destroy(pool_, 1);
+  sem_destroy(&q_sem_);
 
   // if (log_buf_offset_) { // here log_buf_offset will not overflow (value size 4KB)
   //   printf("Flush log buffer (%lu, %d)\n", lba_, log_buf_offset_);
