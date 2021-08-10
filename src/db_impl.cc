@@ -64,7 +64,7 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
   }
   else {
     if (options.readonly) cache_ = nullptr;
-    else cache_ = NewLRUCache(4<<20, 16); // minimum in-memory cache (4MB) for write queue (get need to examine write Q before reaching device)
+    else cache_ = NewLRUCache(16<<20, 16); // minimum in-memory cache (16MB) for write queue (get need to examine write Q before reaching device)
   }
   options.statistics.get()->setStatsDump(options.stats_dump_interval);
 
@@ -451,7 +451,7 @@ void DBImpl::vLogGarbageCollect() {
 
   auto t_end = std::chrono::high_resolution_clock::now();
   std::cout << std::fixed 
-              << "Wall clock time passed: "
+              << "GC Wall clock time passed: "
               << std::chrono::duration<double>(t_end-t_start).count()
               << " s\n";
   
