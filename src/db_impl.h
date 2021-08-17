@@ -96,9 +96,11 @@ private:
   void flushVLog();
   void vLogGCWorker(std::vector<std::string> *ukey_list, std::vector<std::string> *vmeta_list, int idx, int size, int* oldLogFD, int* newLogFD);
 
-    // thread pool
-    threadpool_t *pool_;
-    sem_t q_sem_;
+  // thread pool
+  threadpool_t *pool_;
+  sem_t q_sem_;
+  // I/O request conter (read only for now)
+  std::atomic<int64_t> inflight_io_count_;
 
   // in-memory cache
   Cache *cache_;

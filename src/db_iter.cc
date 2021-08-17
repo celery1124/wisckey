@@ -165,6 +165,7 @@ void DBIterator::prefetch_value(std::vector<int> fd_list, std::vector<std::strin
   Monitor mon;
   Prefetch_context *ctx = new Prefetch_context (prefetch_num, &mon);
 
+  db_->inflight_io_count_.fetch_add(prefetch_num, std::memory_order_relaxed);
   for (int i = 0 ; i < prefetch_num; i++) {
     char *p = (char *)&(pkey_list[i][0]);
     uint64_t logOffset= *((uint64_t *)p);
@@ -179,6 +180,7 @@ void DBIterator::prefetch_value(std::vector<int> fd_list, std::vector<std::strin
   }
 
   mon.wait();
+  db_->inflight_io_count_.fetch_sub(prefetch_num, std::memory_order_relaxed);
   // save the vbuf
   for (int i = 0; i < prefetch_num; i++) {
     val_list.push_back(std::string(vbuf_list[i], valSize_list[i]));
@@ -195,7 +197,7 @@ void DBIterator::prefetch_value(std::vector<int> fd_list, std::vector<std::strin
 }
 
 DBIterator::DBIterator(DBImpl *db, const ReadOptions &options) 
-: db_(db), options_(options), valid_(false){
+: db_(db), options_(options), valid_(false), queue_cur_(0){
   
   rocksdb::ReadOptions rdopts;
   if (options_.upper_key != NULL) {
@@ -207,8 +209,8 @@ DBIterator::DBIterator(DBImpl *db, const ReadOptions &options)
   }
 
   // whether to prefetch?
-  prefetch_ena_ = db_->options_.prefetchEnabled;
-  prefetch_depth_ = db_->options_.prefetchDepth;
+  prefetch_ena_ = db_->options_.prefetchEnabled && (db_->inflight_io_count_.load(std::memory_order_relaxed) < db_->options_.prefetchReqThres);
+  prefetch_depth_ = 1;
   if (prefetch_ena_) {
     int prefetch_depth = db_->options_.prefetchDepth;
     key_queue_ = new std::string[prefetch_depth];

@@ -24,7 +24,8 @@ inline uint64_t Hash0 (std::string& key) {
 }
 
 DBImpl::DBImpl(const Options& options, const std::string& dbname) 
-: options_(options), dbname_(dbname) {
+: options_(options), dbname_(dbname),
+  inflight_io_count_(0) {
   rocksdb::Options rocksOptions;
   rocksOptions.IncreaseParallelism();
   // rocksOptions.OptimizeLevelStyleCompaction();
@@ -462,7 +463,7 @@ void DBImpl::vLogGarbageCollect() {
   }
   else {
     if (options_.readonly) cache_ = nullptr;
-    else cache_ = NewLRUCache(4<<20, 16); // minimum in-memory cache (4MB) for write queue (get need to examine write Q before reaching device)
+    else cache_ = NewLRUCache(16<<20, 16); // minimum in-memory cache (4MB) for write queue (get need to examine write Q before reaching device)
   }
 };
 
