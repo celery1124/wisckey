@@ -391,7 +391,7 @@ Slice DBIterator::value() {
     char *aligned_val_buf = (char *)aligned_alloc(PAGE_SIZE, rSize);
     size_t rret = pread(db_->logFD_[hash], aligned_val_buf, rSize, aligned_raddr);
     // printf("[pread] offset: %lu, size: %lu, read: %d, errno: %d\n", aligned_raddr, rSize, rret, errno);
-
+    value_.clear();
     value_.append(aligned_val_buf + logOffset - aligned_raddr, valSize);
     free(aligned_val_buf);
     assert(rret >= 0);
