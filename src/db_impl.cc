@@ -25,12 +25,12 @@ inline uint64_t Hash0 (std::string& key) {
 
 DBImpl::DBImpl(const Options& options, const std::string& dbname) 
 : options_(options), dbname_(dbname),
-  inflight_io_count_(0) {
+  inflight_io_count_(0), dbstats_(nullptr) {
   rocksdb::Options rocksOptions;
   rocksOptions.IncreaseParallelism();
   // rocksOptions.OptimizeLevelStyleCompaction();
   rocksOptions.create_if_missing = true;
-  rocksOptions.max_open_files = 1000;
+  rocksOptions.max_open_files = options.maxOpenFiles;
   rocksOptions.compression = rocksdb::kNoCompression;
   rocksOptions.paranoid_checks = false;
   rocksOptions.allow_mmap_reads = false;
@@ -40,6 +40,8 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
   rocksOptions.write_buffer_size = 64 << 20;
   rocksOptions.target_file_size_base = 64 * 1048576;
   rocksOptions.max_bytes_for_level_base = 64 * 1048576;
+  // dbstats_ = rocksdb::CreateDBStatistics();
+  // rocksOptions.statistics = dbstats_;
 
   rocksdb::BlockBasedTableOptions table_options;
   if (options.filterType == Bloom) {
@@ -52,6 +54,8 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
   }
   table_options.block_size = 16384;
   //table_options.cache_index_and_filter_blocks = true;
+  //table_options.pin_l0_filter_and_index_blocks_in_cache = true;
+  //table_options.cache_index_and_filter_blocks_with_high_priority = true;
   if (options.indexCacheSize > 0)
     table_options.block_cache = rocksdb::NewLRUCache((size_t)options.indexCacheSize * 1024 * 1024LL);
   else {
@@ -136,6 +140,7 @@ DBImpl::~DBImpl() {
     fdatasync(logFD_[i]);
     close(logFD_[i]);
   }
+  if (dbstats_) fprintf(stdout, "STATISTICS:\n%s\n", dbstats_->ToString().c_str());
 }
 
 inline uint64_t roundUp(uint64_t in, uint64_t roundTo)

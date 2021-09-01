@@ -104,6 +104,7 @@ private:
 
   // in-memory cache
   Cache *cache_;
+  std::shared_ptr<rocksdb::Statistics> dbstats_;
 
   // in-memory cache interface
 	Cache::Handle* read_cache(std::string& key, std::string* value) {

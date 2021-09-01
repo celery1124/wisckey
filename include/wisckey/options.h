@@ -32,6 +32,9 @@ enum FilterType {
 struct Options {
   // -------------------
   // Parameters that affect behavior
+  // Table cache in number of files (only support LSM)
+  // Default: 1000
+  int maxOpenFiles;
 
   // Index cache size in MB (currently only support LSM)
   // Default: 128MB
@@ -97,7 +100,8 @@ struct Options {
   // Default: false
   bool readonly;
 
-  Options() : indexCacheSize(128),
+  Options() : maxOpenFiles(1000),
+              indexCacheSize(128),
               prefetchEnabled(false),
               prefetchDepth(64),
               prefetchReqThres(128),
