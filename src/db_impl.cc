@@ -53,9 +53,9 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
     table_options.filter_policy.reset(rocksdb::NewSuRFPolicy(2, 4, true, options.filterBitsPerKey, true));
   }
   table_options.block_size = 16384;
-  //table_options.cache_index_and_filter_blocks = true;
-  //table_options.pin_l0_filter_and_index_blocks_in_cache = true;
-  //table_options.cache_index_and_filter_blocks_with_high_priority = true;
+  table_options.cache_index_and_filter_blocks = true;
+  table_options.pin_l0_filter_and_index_blocks_in_cache = false;
+  table_options.cache_index_and_filter_blocks_with_high_priority = false;
   if (options.indexCacheSize > 0)
     table_options.block_cache = rocksdb::NewLRUCache((size_t)options.indexCacheSize * 1024 * 1024LL);
   else {
@@ -230,7 +230,6 @@ Status DBImpl::Put(const WriteOptions& options,
   rocksdb::Slice rocks_key(key.data(), key.size());
   rocksdb::Slice rocks_val(metaVal, 12);
   rocksdb::WriteOptions write_options;
-  // write_options.disableWAL = true;
   rocksdb::Status s = rdb_->Put(write_options, rocks_key, rocks_val);
   assert(s.ok());
   
@@ -247,7 +246,6 @@ Status DBImpl::Delete(const WriteOptions& options, const Slice& key) {
   erase_cache(skey);
 
   rocksdb::WriteOptions write_options;
-  // write_options.disableWAL = true;
   rocksdb::Slice rocks_key(key.data(), key.size());
   rocksdb::Status s = rdb_->Delete(write_options, rocks_key);
   
@@ -320,12 +318,11 @@ void DBImpl::flushVLog() {
   return;
 }
 
-void DBImpl::vLogGCWorker(std::vector<std::string> *ukey_list, std::vector<std::string> *vmeta_list, int idx, int size, int* oldLogFD, int* newLogFD) {
+void DBImpl::vLogGCWorker(int hash, std::vector<std::string> *ukey_list, std::vector<std::string> *vmeta_list, int idx, int size, int* oldLogFD, int* newLogFD) {
 
   for (int i = idx; i < idx+size; i++) {
     std::string ukey = (*ukey_list)[i];
-    // hash 
-    uint64_t hash = Hash0(ukey) % LOG_PARTITION;
+
     // read
     const char *p = (*vmeta_list)[i].data();
     uint64_t logOffset= *((uint64_t *)p);
@@ -365,7 +362,6 @@ void DBImpl::vLogGCWorker(std::vector<std::string> *ukey_list, std::vector<std::
     rocksdb::Slice rocks_key(ukey.data(), ukey.size());
     rocksdb::Slice rocks_val(metaVal, 12);
     rocksdb::WriteOptions write_options;
-    // write_options.disableWAL = true;
     rocksdb::Status s = rdb_->Put(write_options, rocks_key, rocks_val);
     assert(s.ok());
     free(aligned_val_buf);
@@ -407,52 +403,58 @@ void DBImpl::vLogGarbageCollect() {
   rocksdb::Iterator *it = rdb_->NewIterator(options);
   it->SeekToFirst();
 
-  std::vector<std::string> ukey_list;
-  std::vector<std::string> vmeta_list;
+  std::vector<std::string> ukey_list[LOG_PARTITION];
+  std::vector<std::string> vmeta_list[LOG_PARTITION];
   while(it->Valid()) {
     rocksdb::Slice rocks_key = it->key();
     rocksdb::Slice rocks_val = it->value();
+    // hash 
+    std::string vkey = std::string(rocks_key.data(), rocks_key.size());
+    uint64_t hash = Hash0(vkey) % LOG_PARTITION;
 
     assert(rocks_val.size() == 12);
-    ukey_list.push_back(std::string(rocks_key.data(), rocks_key.size()));
-    vmeta_list.push_back(std::string(rocks_val.data(), rocks_val.size()));
+    ukey_list[hash].push_back(std::string(rocks_key.data(), rocks_key.size()));
+    vmeta_list[hash].push_back(std::string(rocks_val.data(), rocks_val.size()));
     it->Next();
   }
   delete it;
     
-  // assign worker threads to move valie value to new vlog
-  int gc_worker_num = options_.GCWorkerThreads; // hardcoded
+  // assign worker threads to move valid value to new vlog
+  int gc_worker_num = options_.GCWorkerThreads; 
   std::thread **gc_worker_threads = new std::thread*[gc_worker_num]; 
-  uint64_t remain_keys = ukey_list.size();
-  int job_size = remain_keys / gc_worker_num;
-  int job_start_idx = 0;
-  for (int i = 0; i < gc_worker_num; i++) {
-    int jSize = (i == (gc_worker_num - 1) ? remain_keys : job_size);
-    gc_worker_threads[i] = new std::thread(&wisckey::DBImpl::vLogGCWorker, this, &ukey_list, &vmeta_list, job_start_idx, jSize, oldLogFD_, newLogFD_);
-    job_start_idx += jSize;
-    remain_keys -= jSize;
-  }
-  assert(remain_keys == 0);
+  
+  for (int p = 0; p < LOG_PARTITION; p++) {
+    uint64_t remain_keys = ukey_list[p].size();
+    int job_size = remain_keys / gc_worker_num;
+    int job_start_idx = 0;
+    for (int i = 0; i < gc_worker_num; i++) {
+      int jSize = (i == (gc_worker_num - 1) ? remain_keys : job_size);
+      gc_worker_threads[i] = new std::thread(&wisckey::DBImpl::vLogGCWorker, this, p, &ukey_list[p], &vmeta_list[p], job_start_idx, jSize, oldLogFD_, newLogFD_);
+      job_start_idx += jSize;
+      remain_keys -= jSize;
+    }
+    assert(remain_keys == 0);
 
-  for (int i = 0; i < gc_worker_num; i++) {
-    gc_worker_threads[i]->join();
-    delete gc_worker_threads[i];
-  }
-  delete [] gc_worker_threads;
+    for (int i = 0; i < gc_worker_num; i++) {
+      gc_worker_threads[i]->join();
+      delete gc_worker_threads[i];
+    }
 
-  // clean up
-  for (int i = 0; i < LOG_PARTITION; i++) {
-    fsync(oldLogFD_[i]);
-    fdatasync(oldLogFD_[i]);
-    close(oldLogFD_[i]);
+    // clean up
+    fsync(oldLogFD_[p]);
+    fdatasync(oldLogFD_[p]);
+    close(oldLogFD_[p]);
     
-    logFD_[i] = newLogFD_[i];
-    std::string tmp_vlog = dbname_+ "/wiskey" + std::to_string(i) + ".tmp";
+    logFD_[p] = newLogFD_[p];
+    std::string tmp_vlog = dbname_+ "/wiskey" + std::to_string(p) + ".tmp";
     if( remove( tmp_vlog.c_str() ) != 0 )
       printf( "Error deleting old value log %s\n", tmp_vlog.c_str() );
     else
-      printf( "Old value log successfully deleted\n" );
+      printf( "Old value log %s successfully deleted\n", tmp_vlog.c_str());
+
   }
+  delete [] gc_worker_threads;
+  
   flushVLog();
 
   auto t_end = std::chrono::high_resolution_clock::now();

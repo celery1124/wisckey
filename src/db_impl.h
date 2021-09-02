@@ -94,7 +94,7 @@ private:
   uint64_t log_buf_offset_[LOG_PARTITION];
 
   void flushVLog();
-  void vLogGCWorker(std::vector<std::string> *ukey_list, std::vector<std::string> *vmeta_list, int idx, int size, int* oldLogFD, int* newLogFD);
+  void vLogGCWorker(int hash, std::vector<std::string> *ukey_list, std::vector<std::string> *vmeta_list, int idx, int size, int* oldLogFD, int* newLogFD);
 
   // thread pool
   threadpool_t *pool_;
