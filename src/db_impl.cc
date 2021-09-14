@@ -52,24 +52,28 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
     printf("Filter policy: Surf 2,4 %d bits per key\n", options.filterBitsPerKey);
     table_options.filter_policy.reset(rocksdb::NewSuRFPolicy(2, 4, true, options.filterBitsPerKey, true));
   }
-  table_options.block_size = 16384;
+  table_options.block_size = options.indexBlockSize;
   table_options.cache_index_and_filter_blocks = true;
-  table_options.pin_l0_filter_and_index_blocks_in_cache = false;
-  table_options.cache_index_and_filter_blocks_with_high_priority = false;
+  table_options.pin_l0_filter_and_index_blocks_in_cache = true;
+  table_options.cache_index_and_filter_blocks_with_high_priority = true;
   if (options.indexCacheSize > 0)
     table_options.block_cache = rocksdb::NewLRUCache((size_t)options.indexCacheSize * 1024 * 1024LL);
   else {
     //table_options.block_cache = rocksdb::NewLRUCache(16384);
     table_options.no_block_cache = true;
+    table_options.cache_index_and_filter_blocks = false;
+    table_options.pin_l0_filter_and_index_blocks_in_cache = false;
+    table_options.cache_index_and_filter_blocks_with_high_priority = false;
   } 
   rocksOptions.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
+  // allocate write buffer 2 times larger than log buffer
+  write_buffer_ = NewLRUCache((size_t)options.logBufSize * 2 + 16384, 0);
   if (options.dataCacheSize > 0) {
     cache_ = NewLRUCache((size_t)options.dataCacheSize << 20, 0);
   }
   else {
-    if (options.readonly) cache_ = nullptr;
-    else cache_ = NewLRUCache(16<<20, 16); // minimum in-memory cache (16MB) for write queue (get need to examine write Q before reaching device)
+    cache_ = nullptr;
   }
   options.statistics.get()->setStatsDump(options.stats_dump_interval);
 
@@ -80,8 +84,11 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
   // apply db options
   rocksdb::Status status = rocksdb::DB::Open(rocksOptions, dbname, &rdb_);
   if (status.ok()) printf("rocksdb open ok\n");
-  else printf("rocksdb open error\n");
-
+  else {
+     std::string status_str=status.ToString();
+     printf("rocksdb open error: %s\n", status_str.c_str());
+     exit(-1);
+  }
   // log buffer
   assert(options.logBufSize > 0);
   for (int i = 0; i < LOG_PARTITION; i++) {
@@ -117,6 +124,7 @@ DBImpl::~DBImpl() {
   flushVLog();
 
   if (cache_) delete cache_;
+  if (write_buffer_) delete write_buffer_;
   rocksdb::CancelAllBackgroundWork(rdb_, true);
   delete rdb_;
 
@@ -171,7 +179,7 @@ Status DBImpl::Put(const WriteOptions& options,
   // insert to in-memory cache
   std::string skey(key.data(), key.size());
   Cache::Handle* h = insert_cache(skey, value);
-  release_cache(h);
+  release_cache_entry(h);
 
   // hash
   uint64_t hash = Hash0(key)%LOG_PARTITION;
@@ -205,6 +213,9 @@ Status DBImpl::Put(const WriteOptions& options,
   // int wSize = roundUp(value.size(), PAGE_SIZE);
   int wSize = value.size();
   uint64_t lba ;
+  // write to write buffer first
+  Cache::Handle* bh = insert_buffer(skey, value);
+  release_buffer_entry(bh);
   // write value to log, make sure lseek and write atomic
   {
     std::unique_lock<std::mutex> lock(logM_[hash]);
@@ -243,7 +254,8 @@ Status DBImpl::Delete(const WriteOptions& options, const Slice& key) {
   RecordTick(options_.statistics.get(), REQ_DEL);
   // simply update lsm-index (vlog GC manually)
   std::string skey(key.data(), key.size());
-  erase_cache(skey);
+  erase_cache_entry(skey);
+  erase_buffer_entry(skey);
 
   rocksdb::WriteOptions write_options;
   rocksdb::Slice rocks_key(key.data(), key.size());
@@ -262,7 +274,7 @@ Status DBImpl::Get(const ReadOptions& options,
   std::string skey(key.data(), key.size());
   Cache::Handle *h = read_cache(skey, value);
   if (h != NULL) { // hit in cache
-      release_cache(h);
+      release_cache_entry(h);
       return Status();
   }
 //printf("get key: %s\n", skey.c_str());
@@ -273,7 +285,16 @@ Status DBImpl::Get(const ReadOptions& options,
   rocksdb::Slice rocks_key(key.data(), key.size());
   std::string rocks_val;
   rocksdb::Status s = rdb_->Get(rocksdb::ReadOptions(), rocks_key, &rocks_val);
-  if (s.IsNotFound()) return Status().NotFound(Slice());
+  if (s.IsNotFound()) {
+    RecordTick(options_.statistics.get(), REQ_GET_NOEXIST);
+    return Status().NotFound(Slice());
+  }
+  // check write buffer before reaching device if key exist
+  Cache::Handle *bh = read_buffer(skey, value);
+  if (bh != NULL) { // hit in cache
+      release_cache_entry(bh);
+      return Status();
+  }
   
   assert(s.ok() && rocks_val.size() == 12);
   char *p = &rocks_val[0];
@@ -295,7 +316,7 @@ Status DBImpl::Get(const ReadOptions& options,
   // insert to in-memory cache
   const Slice val(value->data(), value->size());
   h = insert_cache(skey, val);
-  release_cache(h);
+  release_cache_entry(h);
   return Status();
 }
 
@@ -465,12 +486,14 @@ void DBImpl::vLogGarbageCollect() {
   
   // rebuild cache after GC
   if(cache_) delete cache_;
+  if (write_buffer_) delete write_buffer_;
+  // allocate write buffer 2 times larger than log buffer
+  write_buffer_ = NewLRUCache((size_t)options_.logBufSize * 2 + 16384, 0);
   if (options_.dataCacheSize > 0) {
     cache_ = NewLRUCache((size_t)options_.dataCacheSize << 20, 0);
   }
   else {
-    if (options_.readonly) cache_ = nullptr;
-    else cache_ = NewLRUCache(16<<20, 16); // minimum in-memory cache (4MB) for write queue (get need to examine write Q before reaching device)
+    cache_ = nullptr;
   }
 };
 

@@ -36,6 +36,9 @@ struct Options {
   // Default: 1000
   int maxOpenFiles;
 
+  // Rocks Index LSM-Tree block size
+  // Default: 4096
+  int indexBlockSize;
   // Index cache size in MB (currently only support LSM)
   // Default: 128MB
   int indexCacheSize;
@@ -101,6 +104,7 @@ struct Options {
   bool readonly;
 
   Options() : maxOpenFiles(1000),
+              indexBlockSize(4096),
               indexCacheSize(128),
               prefetchEnabled(false),
               prefetchDepth(64),

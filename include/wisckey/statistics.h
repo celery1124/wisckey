@@ -22,9 +22,15 @@ enum Tickers : uint32_t {
   // request
   REQ_PUT = 0,
   REQ_GET,
+  REQ_GET_NOEXIST,
   REQ_DEL,
   REQ_SEEK,
   REQ_NEXT,
+  // Write buffer
+  WBUFFER_HIT,
+  WBUFFER_MISS,
+  WBUFFER_FILL,
+  WBUFFER_ERASE,
   // Cache
   CACHE_HIT,
   CACHE_MISS,
@@ -36,9 +42,14 @@ enum Tickers : uint32_t {
 const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
     {REQ_PUT, "req.put"},
     {REQ_GET, "req.get"},
+    {REQ_GET_NOEXIST, "req.get.noexist"},
     {REQ_DEL, "req.delete"},
     {REQ_SEEK, "req.seek"},
     {REQ_NEXT, "req.next"},
+    {WBUFFER_HIT, "write.buffer.hit"},
+    {WBUFFER_MISS, "write.buffer.miss"},
+    {WBUFFER_FILL, "write.buffer.fill"},
+    {WBUFFER_ERASE, "write.buffer.erase"},
     {CACHE_HIT, "cache.hit"},
     {CACHE_MISS, "cache.miss"},
     {CACHE_FILL, "cache.fill"},
