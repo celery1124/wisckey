@@ -492,6 +492,9 @@ void DBImpl::vLogGarbageCollect() {
     }
 
     // clean up
+    ukey_list[p].clear(); // reclaim memory
+    vmeta_list[p].clear();
+
     fsync(oldLogFD_[p]);
     fdatasync(oldLogFD_[p]);
     close(oldLogFD_[p]);
