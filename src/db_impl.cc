@@ -59,7 +59,6 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
   if (options.indexCacheSize > 0)
     table_options.block_cache = rocksdb::NewLRUCache((size_t)options.indexCacheSize * 1024 * 1024LL);
   else {
-    //table_options.block_cache = rocksdb::NewLRUCache(16384);
     table_options.no_block_cache = true;
     table_options.cache_index_and_filter_blocks = false;
     table_options.pin_l0_filter_and_index_blocks_in_cache = false;
@@ -68,9 +67,11 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
   rocksOptions.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
   // allocate write buffer 2 times larger than log buffer
-  write_buffer_ = NewLRUCache((size_t)options.logBufSize * 2 + 16384, 0);
+  for (int i = 0; i < LOG_PARTITION; i++) {
+    write_buffer_[i] = NewFIFOCache((size_t)options.logBufSize / LOG_PARTITION * 2 + 16384, 2);
+  }
   if (options.dataCacheSize > 0) {
-    cache_ = NewLRUCache((size_t)options.dataCacheSize << 20, 0);
+    cache_ = NewLRUCache((size_t)options.dataCacheSize << 20, -1);
   }
   else {
     cache_ = nullptr;
@@ -124,7 +125,9 @@ DBImpl::~DBImpl() {
   flushVLog();
 
   if (cache_) delete cache_;
-  if (write_buffer_) delete write_buffer_;
+  for (int i = 0; i < LOG_PARTITION; i++) {
+    if (write_buffer_[i]) delete write_buffer_[i];
+  }
   rocksdb::CancelAllBackgroundWork(rdb_, true);
   delete rdb_;
 
@@ -214,8 +217,8 @@ Status DBImpl::Put(const WriteOptions& options,
   int wSize = value.size();
   uint64_t lba ;
   // write to write buffer first
-  Cache::Handle* bh = insert_buffer(skey, value);
-  release_buffer_entry(bh);
+  Cache::Handle* bh = insert_buffer(hash, skey, value);
+  release_buffer_entry(hash, bh);
   // write value to log, make sure lseek and write atomic
   {
     std::unique_lock<std::mutex> lock(logM_[hash]);
@@ -226,6 +229,7 @@ Status DBImpl::Put(const WriteOptions& options,
       // pwrite needs to write PAGE_SIZE aligned buffer
       log_buf_offset_[hash] =  roundUp(log_buf_offset_[hash], PAGE_SIZE);
       wret = pwrite(logFD_[hash], aligned_log_buf_[hash], log_buf_offset_[hash], lba_[hash]);
+      // fprintf(stderr, "pwrite fid: %d, size %lu, lba %lu, ret %d\n", logFD_[hash], log_buf_offset_[hash], lba_[hash], wret);
       // printf("pwrite size %lu, lba %lu, ret %d\n", log_buf_offset_[hash], lba_[hash], wret);
       lba_[hash] += log_buf_offset_[hash];
       log_buf_offset_[hash] = 0;
@@ -242,6 +246,13 @@ Status DBImpl::Put(const WriteOptions& options,
   rocksdb::Slice rocks_val(metaVal, 12);
   rocksdb::WriteOptions write_options;
   rocksdb::Status s = rdb_->Put(write_options, rocks_key, rocks_val);
+
+  int wi_retry_cnt = 0;
+  while (!s.ok()) {
+    fprintf(stderr, "[rocks index put] err: %s\n", s.ToString().c_str());
+    s = rdb_->Put(write_options, rocks_key, rocks_val);
+    if (wi_retry_cnt++ >= 3) return Status().IOError(Slice());
+  }
   assert(s.ok());
   
   // printf("[pwrite] offset: %lu, size: %lu, write: %d, errno: %d\n", lba, wSize, wret, errno);
@@ -255,7 +266,9 @@ Status DBImpl::Delete(const WriteOptions& options, const Slice& key) {
   // simply update lsm-index (vlog GC manually)
   std::string skey(key.data(), key.size());
   erase_cache_entry(skey);
-  erase_buffer_entry(skey);
+  
+  uint64_t hash = Hash0(key)%LOG_PARTITION;
+  erase_buffer_entry(hash, skey);
 
   rocksdb::WriteOptions write_options;
   rocksdb::Slice rocks_key(key.data(), key.size());
@@ -285,14 +298,23 @@ Status DBImpl::Get(const ReadOptions& options,
   rocksdb::Slice rocks_key(key.data(), key.size());
   std::string rocks_val;
   rocksdb::Status s = rdb_->Get(rocksdb::ReadOptions(), rocks_key, &rocks_val);
+  
   if (s.IsNotFound()) {
     RecordTick(options_.statistics.get(), REQ_GET_NOEXIST);
     return Status().NotFound(Slice());
   }
+  int ri_retry_cnt = 0;
+  while (!(s.ok())) { // read index retry, rare
+    usleep(100);
+    s = rdb_->Get(rocksdb::ReadOptions(), rocks_key, &rocks_val);
+    uint64_t ino = *(uint64_t *)skey.data();
+    fprintf(stderr, "[read index retry] key: %lx, %s, err: %s\n", ino, skey.data()+8, s.ToString().c_str());
+    if (ri_retry_cnt++ >= 3) return Status().NotFound(Slice());
+  }
   // check write buffer before reaching device if key exist
-  Cache::Handle *bh = read_buffer(skey, value);
-  if (bh != NULL) { // hit in cache
-      release_cache_entry(bh);
+  Cache::Handle *bh = read_buffer(hash, skey, value);
+  if (bh != NULL) { // hit in write buffer
+      release_buffer_entry(hash, bh);
       return Status();
   }
   
@@ -307,8 +329,16 @@ Status DBImpl::Get(const ReadOptions& options,
   int rSize = roundUp(logOffset - aligned_raddr + valSize, PAGE_SIZE);
   char *aligned_val_buf = (char *)aligned_alloc(PAGE_SIZE, rSize);
   size_t rret = pread(logFD_[hash], aligned_val_buf, rSize, aligned_raddr);
+  // fprintf(stderr, "[pread] fid: %d, offset: %lu, size: %lu, read: %d, errno: %d\n", logFD_[hash], aligned_raddr, rSize, rret, errno);
   // printf("[pread] offset: %lu, size: %lu, read: %d, errno: %d\n", aligned_raddr, rSize, rret, errno);
 
+  int pr_retry_cnt = 0;
+  while (rret <= 0) { // read retry (log buffer not flushed, something wrong with write buffer), rare
+    usleep(100);
+    rret = pread(logFD_[hash], aligned_val_buf, rSize, aligned_raddr);
+    fprintf(stderr, "[pread retry] fid: %d, offset: %lu, size: %lu, read: %d, errno: %d\n", logFD_[hash], aligned_raddr, rSize, rret, errno);
+    if (++pr_retry_cnt >= 3) return Status().NotFound(Slice());
+  }
   assert(rret >= 0);
   value->append(aligned_val_buf + logOffset - aligned_raddr, valSize);
   free(aligned_val_buf);
@@ -486,11 +516,15 @@ void DBImpl::vLogGarbageCollect() {
   
   // rebuild cache after GC
   if(cache_) delete cache_;
-  if (write_buffer_) delete write_buffer_;
+  for (int i = 0; i < LOG_PARTITION; i++) {
+    if (write_buffer_[i]) delete write_buffer_[i];
+  }
   // allocate write buffer 2 times larger than log buffer
-  write_buffer_ = NewLRUCache((size_t)options_.logBufSize * 2 + 16384, 0);
+  for (int i = 0; i < LOG_PARTITION; i++) {
+    write_buffer_[i] = NewFIFOCache((size_t)options_.logBufSize / LOG_PARTITION * 2 + 16384, 2);
+  }
   if (options_.dataCacheSize > 0) {
-    cache_ = NewLRUCache((size_t)options_.dataCacheSize << 20, 0);
+    cache_ = NewLRUCache((size_t)options_.dataCacheSize << 20, -1);
   }
   else {
     cache_ = nullptr;

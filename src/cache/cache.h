@@ -86,6 +86,7 @@ class Cache {
 
 
 extern Cache* NewLRUCache(size_t capacity, int num_shard_bits);
+extern Cache* NewFIFOCache(size_t capacity, int num_shard_bits);
 extern Cache* NewLFUCache(size_t capacity, int num_shard_bits);
 extern Cache* NewPLFUCache(size_t capacity, int num_shard_bits);
 extern Cache* NewBCache(size_t capacity, int num_shard_bits, std::ifstream &ifile);

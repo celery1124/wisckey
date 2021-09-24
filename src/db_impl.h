@@ -103,17 +103,17 @@ private:
   std::atomic<int64_t> inflight_io_count_;
   
   // in-memory write buffer
-  Cache *write_buffer_;
+  Cache *write_buffer_[LOG_PARTITION];
   // in-memory data cache
   Cache *cache_;
   std::shared_ptr<rocksdb::Statistics> dbstats_;
 
   // in-memory write buffer interface
-    Cache::Handle* read_buffer(std::string& key, std::string* value) {
-        if (write_buffer_==NULL) return NULL;
-        Cache::Handle *h = write_buffer_->Lookup(key);
+    Cache::Handle* read_buffer(int id, std::string& key, std::string* value) {
+        if (write_buffer_[id]==NULL) return NULL;
+        Cache::Handle *h = write_buffer_[id]->Lookup(key);
         if (h != NULL) {
-            CacheEntry *rd_val = reinterpret_cast<CacheEntry*>(write_buffer_->Value(h));
+            CacheEntry *rd_val = reinterpret_cast<CacheEntry*>(write_buffer_[id]->Value(h));
             value->append(rd_val->val, rd_val->size);
             RecordTick(options_.statistics.get(), WBUFFER_HIT);
         }
@@ -121,23 +121,23 @@ private:
             RecordTick(options_.statistics.get(), WBUFFER_MISS);
         return h;
     };
-    Cache::Handle* insert_buffer(std::string& key, const Slice& value) {
-        if (write_buffer_==NULL) return NULL;
+    Cache::Handle* insert_buffer(int id, std::string& key, const Slice& value) {
+        if (write_buffer_[id]==NULL) return NULL;
         CacheEntry *ins_val = new CacheEntry((char *)value.data(), value.size());
         size_t charge = sizeof(CacheEntry) + value.size();
-        Cache::Handle *h = write_buffer_->Insert(key, reinterpret_cast<void*>(ins_val), charge, DeleteEntry<CacheEntry>);
+        Cache::Handle *h = write_buffer_[id]->Insert(key, reinterpret_cast<void*>(ins_val), charge, DeleteEntry<CacheEntry>);
         RecordTick(options_.statistics.get(), WBUFFER_FILL);
         return h;
     };
-    void erase_buffer_entry(std::string& key) {
-        if (write_buffer_==NULL) return ;
-        bool evicted = write_buffer_->Erase(key);
+    void erase_buffer_entry(int id, std::string& key) {
+        if (write_buffer_[id]==NULL) return ;
+        bool evicted = write_buffer_[id]->Erase(key);
 
         if (evicted) RecordTick(options_.statistics.get(), WBUFFER_ERASE);
     };
-    void release_buffer_entry(Cache::Handle* h) {
-        if (write_buffer_==NULL) return ;
-        write_buffer_->Release(h);
+    void release_buffer_entry(int id, Cache::Handle* h) {
+        if (write_buffer_[id]==NULL) return ;
+        write_buffer_[id]->Release(h);
     };
 
   // in-memory cache interface
