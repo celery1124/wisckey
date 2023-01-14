@@ -73,6 +73,7 @@ class DB {
   // The returned iterator should be deleted before this db is deleted.
   virtual Iterator* NewIterator(const ReadOptions& options) = 0;
 
+  virtual void flushVLog() = 0;
   virtual void vLogGarbageCollect() = 0;
 
  private:

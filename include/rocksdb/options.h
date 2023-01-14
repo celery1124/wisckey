@@ -899,16 +899,6 @@ struct DBOptions {
   // relies on manual invocation of FlushWAL to write the WAL buffer to its
   // file.
   bool manual_wal_flush = false;
-
-  // Increase the sequence number after writing each batch, whether memtable is
-  // disabled for that or not. Otherwise the sequence number is increased after
-  // writing each key into memtable. This implies that when memtable_disable is
-  // set, the seq is not increased at all.
-  //
-  // Default: false
-  // Note: This option is experimental and meant to be used only for internal
-  // projects.
-  bool seq_per_batch = false;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)
@@ -1063,14 +1053,6 @@ struct ReadOptions {
   // Default: false
   bool ignore_range_deletions;
 
-  // A callback to determine whether relevant keys for this scan exist in a
-  // given table based on the table's properties. The callback is passed the
-  // properties of each table during iteration. If the callback returns false,
-  // the table will not be scanned. This option only affects Iterators and has
-  // no impact on point lookups.
-  // Default: empty (every table will be scanned)
-  std::function<bool(const TableProperties&)> table_filter;
-
   ReadOptions();
   ReadOptions(bool cksum, bool cache);
 };
@@ -1097,7 +1079,6 @@ struct WriteOptions {
 
   // If true, writes will not first go to the write ahead log,
   // and the write may got lost after a crash.
-  // Default: false
   bool disableWAL;
 
   // If true and if user is trying to write to column families that don't exist
@@ -1108,7 +1089,6 @@ struct WriteOptions {
 
   // If true and we need to wait or sleep for the write request, fails
   // immediately with Status::Incomplete().
-  // Default: false
   bool no_slowdown;
 
   // If true, this write request is of lower priority if compaction is

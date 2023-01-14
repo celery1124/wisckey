@@ -138,7 +138,7 @@ struct Options {
   static std::shared_ptr<Statistics> CreateDBStatistics() {
     printf("Wisckey Statistics Created\n");
     return std::make_shared<Statistics>();
-  } 
+  }
 };
 
 // Options that control read operations

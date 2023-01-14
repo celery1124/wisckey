@@ -26,8 +26,6 @@
 #include <string>
 #include <vector>
 
-#include "rocksdb/slice.h"
-
 namespace rocksdb {
 
 class Slice;
@@ -48,10 +46,6 @@ class FilterBitsBuilder {
   virtual Slice Finish(std::unique_ptr<const char[]>* buf) = 0;
 
   // Calculate num of entries fit into a space.
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4702) // unreachable code
-#endif
   virtual int CalculateNumEntry(const uint32_t space) {
 #ifndef ROCKSDB_LITE
     throw std::runtime_error("CalculateNumEntry not Implemented");
@@ -60,9 +54,6 @@ class FilterBitsBuilder {
 #endif
     return 0;
   }
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
 };
 
 // A class that checks if a key can be in filter
@@ -73,16 +64,6 @@ class FilterBitsReader {
 
   // Check if the entry match the bits in filter
   virtual bool MayMatch(const Slice& entry) = 0;
-
-  // huanchen
-  virtual Slice Seek(const Slice& entry, unsigned* bitlen, const bool inclusive) {
-      return Slice();
-  }
-
-  // huanchen
-  virtual Slice SeekForPrev(const Slice& entry, unsigned* bitlen, const bool inclusive) {
-      return Slice();
-  }
 };
 
 // We add a new format of filter block called full filter block
@@ -158,15 +139,7 @@ class FilterPolicy {
 // FilterPolicy (like NewBloomFilterPolicy) that does not ignore
 // trailing spaces in keys.
 extern const FilterPolicy* NewBloomFilterPolicy(int bits_per_key,
-						bool use_block_based_builder = true);
-
-// huanchen
-// suffix_type: 0 (no suffix), 1 (hash), 2(real)
-extern const FilterPolicy* NewSuRFPolicy(int suffix_type = 0,
-					 uint32_t suffix_len = 0,
-					 bool include_dense = true,
-					 uint32_t sparse_dense_ratio = 16,
-					 bool use_block_based_builder = true);
+    bool use_block_based_builder = true);
 }
 
 #endif  // STORAGE_ROCKSDB_INCLUDE_FILTER_POLICY_H_

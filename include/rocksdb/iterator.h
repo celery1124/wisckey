@@ -43,11 +43,6 @@ class Iterator : public Cleanable {
   // Valid() after this call iff the source is not empty.
   virtual void SeekToLast() = 0;
 
-  // huanchen
-  virtual Slice FilterSeek(const Slice& target) const {
-      return Slice();
-  }
-
   // Position at the first key in the source that at or past target
   // The iterator is Valid() after this call iff the source contains
   // an entry that comes at or past target.

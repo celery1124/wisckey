@@ -233,12 +233,6 @@ class WriteBatch : public WriteBatchBase {
     }
     virtual void Merge(const Slice& /*key*/, const Slice& /*value*/) {}
 
-    virtual Status PutBlobIndexCF(uint32_t /*column_family_id*/,
-                                  const Slice& /*key*/,
-                                  const Slice& /*value*/) {
-      return Status::InvalidArgument("PutBlobIndexCF not implemented");
-    }
-
     // The default implementation of LogData does nothing.
     virtual void LogData(const Slice& blob);
 
@@ -248,10 +242,6 @@ class WriteBatch : public WriteBatchBase {
 
     virtual Status MarkEndPrepare(const Slice& xid) {
       return Status::InvalidArgument("MarkEndPrepare() handler not defined.");
-    }
-
-    virtual Status MarkNoop(bool empty_batch) {
-      return Status::InvalidArgument("MarkNoop() handler not defined.");
     }
 
     virtual Status MarkRollback(const Slice& xid) {
@@ -313,7 +303,7 @@ class WriteBatch : public WriteBatchBase {
   explicit WriteBatch(const std::string& rep);
 
   WriteBatch(const WriteBatch& src);
-  WriteBatch(WriteBatch&& src) noexcept;
+  WriteBatch(WriteBatch&& src);
   WriteBatch& operator=(const WriteBatch& src);
   WriteBatch& operator=(WriteBatch&& src);
 
@@ -327,10 +317,6 @@ class WriteBatch : public WriteBatchBase {
  private:
   friend class WriteBatchInternal;
   friend class LocalSavePoint;
-  // TODO(myabandeh): this is needed for a hack to collapse the write batch and
-  // remove duplicate keys. Remove it when the hack is replaced with a propper
-  // solution.
-  friend class WriteBatchWithIndex;
   SavePoints* save_points_;
 
   // When sending a WriteBatch through WriteImpl we might want to
