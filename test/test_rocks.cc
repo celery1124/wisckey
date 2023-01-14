@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+#define TOTAL_RECORDS 1000
+
 int main () {
     rocksdb::DB* rdb_;
 
@@ -33,7 +35,7 @@ int main () {
     else printf("rocksdb open error\n");
 
     // write some records
-    for (int i = 0 ; i < 1000000; i++) {
+    for (int i = 0 ; i < TOTAL_RECORDS; i++) {
         char key[16] = {0};
         char val[128] = {0};
         sprintf(key, "%0*ld", 16 - 1, i);
@@ -50,7 +52,7 @@ int main () {
     rocksdb::Iterator *it = rdb_->NewIterator(options);
     it->SeekToFirst();
 
-    int newv = 1000000;
+    int newv = TOTAL_RECORDS;
     while (it->Valid()) {
         rocksdb::Slice key = it->key();
         rocksdb::Slice val = it->value();
@@ -59,6 +61,7 @@ int main () {
         sprintf(newval, "value%ld", newv++);
         rocksdb::Slice rval(newval, 128);
         rdb_->Put(rocksdb::WriteOptions(), key, rval);
+        it->Next();
     }
     printf("finished update records through iterator\n");
     delete it;
@@ -70,6 +73,7 @@ int main () {
         rocksdb::Slice key = it->key();
         rocksdb::Slice val = it->value();
         printf("key %s, value %s\n", key.data(), val.data());
+        it->Next();
     }
 
     return 0;
