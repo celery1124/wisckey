@@ -48,10 +48,10 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
     table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(options.filterBitsPerKey, true));
     printf("Filter policy: Bloom %d bits per key\n", options.filterBitsPerKey);
   }
-  else if (options.filterType == Surf) {
-    printf("Filter policy: Surf 2,4 %d bits per key\n", options.filterBitsPerKey);
-    table_options.filter_policy.reset(rocksdb::NewSuRFPolicy(2, 4, true, options.filterBitsPerKey, true));
-  }
+  // else if (options.filterType == Surf) {
+  //   printf("Filter policy: Surf 2,4 %d bits per key\n", options.filterBitsPerKey);
+  //   table_options.filter_policy.reset(rocksdb::NewSuRFPolicy(2, 4, true, options.filterBitsPerKey, true));
+  // }
   table_options.block_size = options.indexBlockSize;
   table_options.cache_index_and_filter_blocks = true;
   table_options.pin_l0_filter_and_index_blocks_in_cache = true;
@@ -76,6 +76,7 @@ DBImpl::DBImpl(const Options& options, const std::string& dbname)
   else {
     cache_ = nullptr;
   }
+
   options.statistics.get()->setStatsDump(options.stats_dump_interval);
 
   // start thread pool for async i/o
